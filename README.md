@@ -2,7 +2,7 @@
 
 An original, single-file **UT99-style arena deathmatch** that runs entirely in your browser. A fan-made homage to the classic 1999 arena shooters — all code, art, sounds, and the map are procedural and original. No game assets, no installs: one HTML file.
 
-**Play:** just open `index.html` in any modern desktop browser (needs internet on first load to fetch three.js from a CDN). Wired and **Bluetooth controllers are fully supported**, including menu navigation and rumble.
+**Play:** just open `index.html` in any modern desktop browser (needs internet on first load to fetch three.js from a CDN). Wired and **Bluetooth controllers are fully supported**, including menu navigation and rumble — and pads with unusual layouts (like the Amazon Luna Controller) get a guided calibration wizard.
 
 ## Features
 
@@ -13,6 +13,7 @@ An original, single-file **UT99-style arena deathmatch** that runs entirely in y
 - **Items** — health vials, kegs, armor (absorbs 60%), damage amp, weapons, and ammo, all on respawn timers
 - **HUD** — kill feed, streak announcer (FIRST BLOOD… MONSTER KILL), scoreboard (Tab)
 - **Gamepad** — pair a Bluetooth pad, press any button on it, and go: full menu navigation, sticks move/look, triggers fire, dual-rumble feedback (toggleable)
+- **Controller calibration** — pads that report a non-standard button/axis layout are flagged on the title screen; a guided 16-step wizard (buttons, triggers, d-pad, sticks) learns the physical layout, saves it per controller in your browser, and applies it automatically every session. A live input monitor shows exactly what the game sees from your pad.
 
 ## Controls
 
@@ -29,7 +30,7 @@ An original, single-file **UT99-style arena deathmatch** that runs entirely in y
 
 ## Tech
 
-One self-contained HTML file (~120 KB) using [three.js](https://threejs.org/) loaded from a CDN. Procedural canvas textures, WebAudio-synthesized weapons and announcer stingers, an auto-generated navigation graph for the bots, and a 43-assertion Node test harness (world/pathfinding, physics, combat math, gamepad lifecycle, and a full bot match simulation).
+One self-contained HTML file (~134 KB) using [three.js](https://threejs.org/) loaded from a CDN. Procedural canvas textures, WebAudio-synthesized weapons and announcer stingers, an auto-generated navigation graph for the bots, and a 65-assertion Node test harness (world/pathfinding, physics, combat math, gamepad lifecycle, non-standard-pad calibration, and a full bot match simulation).
 
 ## Legal
 
