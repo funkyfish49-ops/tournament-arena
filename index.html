@@ -75,8 +75,12 @@
   .seg.padfocus { outline: 2px solid #ffb020; outline-offset: 2px; box-shadow: 0 0 16px rgba(255,176,32,.55); }
   .bigbtn.padfocus { filter: brightness(1.2); outline: 2px solid #ffb020; outline-offset: 3px; box-shadow: 0 0 26px rgba(255,176,32,.75); }
   input[type=range].padfocus { outline: 2px solid #ffb020; outline-offset: 3px; box-shadow: 0 0 14px rgba(255,176,32,.6); }
-  #padstatus { margin-top: 14px; font-size: 12px; letter-spacing: 2px; color: #6f644a; text-align: center; }
+  #padstatus { margin-top: 14px; font-size: 12px; letter-spacing: 2px; color: #6f644a; text-align: center; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
   #padstatus.on { color: #7ee787; }
+  #padprompt { font-size: 19px; letter-spacing: 3px; color: #ffd23e; min-height: 24px; margin: 10px 0; text-align: center; }
+  #padtest { margin-top: 6px; text-align: center; line-height: 2; max-width: 620px; }
+  .padb, .pada { display: inline-block; font-size: 12px; color: #8a8468; border: 1px solid #4a4232; border-radius: 4px; padding: 2px 8px; margin: 2px; letter-spacing: 1px; }
+  .padb.on, .pada.on { color: #7ee787; border-color: #7ee787; box-shadow: 0 0 8px rgba(126,231,135,.45); }
   .note { margin-top: 26px; font-size: 12px; color: #6f644a; letter-spacing: 1px; text-align: center; line-height: 1.7; max-width: 680px; }
   .sensrow input { width: 180px; accent-color: #ffb020; }
   #pause { display: none; }
@@ -125,6 +129,16 @@
     Move: WASD &middot; Jump: SPACE (press again mid-air = double jump) &middot; Dodge: double-tap A/D &middot; Fire: LMB &middot; Alt-fire: RMB &middot; Weapons: 1-5 / wheel<br>
     Gamepad (wired or Bluetooth): pair it, then press any button on it to wake it up &middot; sticks move/look &middot; RT fire &middot; LT alt &middot; A jump &middot; LB/RB or B/X weapon &middot; D-pad/stick + A navigates these menus &middot; Start = play/pause</div>
   <div id="loaderr">Could not load the 3D engine from the network.<br>The game needs internet on first load. Check your connection and reload the page.</div>
+</div>
+<div class="ol screen" id="padsetup">
+  <div class="logo" style="font-size:30px;">CONTROLLER SETUP</div>
+  <div class="note" id="padinfo"></div>
+  <div id="padprompt"></div>
+  <div class="menu">
+    <div id="padtest"></div>
+    <button class="bigbtn" id="padcal">CALIBRATE BUTTONS</button>
+    <button class="bigbtn ghost" id="paddone">DONE</button>
+  </div>
 </div>
 <div class="ol screen" id="pause">
   <div class="logo">PAUSED</div>
@@ -298,7 +312,8 @@ var Input = {
   pointerLocked: false, softLock: false, touchMode: false, everMouse: false,
   everLocked: false, relockTries: 0, sens: 8, canvas: null,
   _kp: [], _md: [], _wheel: [], padLookX: 0, padLookY: 0, lastPad: {}, padOnce: {},
-  padIndex: -1, padName: "", padNonStd: false, _padWas: false,
+  padIndex: -1, padName: "", padNonStd: false, _padWas: false, padMap: null,
+  _STD_BTN: { a:0, b:1, x:2, y:3, lb:4, rb:5, lt:6, rt:7, start:9, dpup:12, dpdn:13, dplf:14, dprt:15 },
   init: function(canvas){
     var self = this;
     this.canvas = canvas;
@@ -370,6 +385,64 @@ var Input = {
     this.mouseDX = 0; this.mouseDY = 0; this.padLookX = 0; this.padLookY = 0;
     return { dx: dx, dy: dy };
   },
+  /* --- name-based pad reads (custom map from PadSetup if calibrated, else standard indices) --- */
+  padBtn: function(name){
+    var pad = this.getPad();
+    if (!pad) return { pressed: false, value: 0 };
+    var m = this.padMap;
+    if (m && m.buttons && m.buttons[name]){
+      var e = m.buttons[name];
+      if (e.axis !== undefined){
+        var av = (pad.axes && pad.axes[e.axis] !== undefined) ? pad.axes[e.axis] : 0;
+        var v = clamp((av - e.zero) / ((e.full - e.zero) || 1), 0, 1);
+        return { pressed: v > 0.35, value: v };
+      }
+      var b = pad.buttons[e.index];
+      if (!b) return { pressed: false, value: 0 };
+      var raw = (b.value !== undefined ? b.value : (b.pressed ? 1 : 0));
+      var val = e.full ? clamp(raw / e.full, 0, 1) : raw;
+      return { pressed: !!b.pressed || val > 0.35, value: val };
+    }
+    var ix = this._STD_BTN[name];
+    var b2 = (ix !== undefined && pad.buttons) ? pad.buttons[ix] : null;
+    if (!b2) return { pressed: false, value: 0 };
+    var raw2 = (b2.value !== undefined ? b2.value : (b2.pressed ? 1 : 0));
+    return { pressed: !!b2.pressed, value: raw2 };
+  },
+  padAxis: function(name){
+    var pad = this.getPad();
+    if (!pad || !pad.axes) return 0;
+    var m = this.padMap;
+    if (m && m.axes && m.axes[name]){
+      var e = m.axes[name];
+      var v = (pad.axes[e.index] !== undefined ? pad.axes[e.index] : 0) * (e.sign || 1);
+      return Math.abs(v) < 0.18 ? 0 : v;
+    }
+    var std = { lx:0, ly:1, rx:2, ry:3 };
+    var ix = std[name];
+    var raw = (ix !== undefined && pad.axes[ix] !== undefined) ? pad.axes[ix] : 0;
+    return Math.abs(raw) < 0.18 ? 0 : raw;
+  },
+  loadPadMap: function(){
+    try {
+      this.padMap = null;
+      var pad = this.getPad();
+      if (!pad) return;
+      var ls = window.localStorage;
+      if (!ls) return;
+      var raw = ls.getItem("ta-padmap-" + pad.id);
+      if (raw) this.padMap = JSON.parse(raw);
+    } catch (e) { this.padMap = null; }
+  },
+  savePadMap: function(map){
+    try {
+      var pad = this.getPad();
+      var id = (pad && pad.id) || "unknown";
+      map.id = id;
+      window.localStorage.setItem("ta-padmap-" + id, JSON.stringify(map));
+    } catch (e) {}
+    this.padMap = map;
+  },
   /* --- gamepad lifecycle (Bluetooth pads can pair/connect at any moment) --- */
   getPad: function(){
     var pads = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -391,7 +464,8 @@ var Input = {
       this._padWas = now;
       if (now){
         this.padName = this.padLabel(pad.id);
-        this.padNonStd = !!(pad.mapping && pad.mapping !== "standard");
+        this.padNonStd = (pad.mapping !== undefined) ? (pad.mapping !== "standard") : false;
+        this.loadPadMap();
         if (Game.state === "play" && !Game.paused) HUD.sub("GAMEPAD CONNECTED: " + this.padName);
       } else {
         if (Game.state === "play" && !Game.paused) HUD.sub("GAMEPAD DISCONNECTED");
@@ -400,7 +474,8 @@ var Input = {
     var chip = document.getElementById("padstatus");
     if (chip){
       var txt = pad
-        ? ("GAMEPAD READY: " + this.padName + (this.padNonStd ? " (NON-STANDARD MAPPING)" : ""))
+        ? ("GAMEPAD READY: " + this.padName +
+           (this.padMap ? " (CALIBRATED)" : (this.padNonStd ? " (NON-STANDARD - TAP HERE TO CALIBRATE)" : " - TAP TO TEST")))
         : "NO GAMEPAD - PAIR YOUR BLUETOOTH PAD, THEN PRESS ANY BUTTON ON IT";
       if (chip.textContent !== txt){
         chip.textContent = txt;
@@ -421,18 +496,12 @@ var Input = {
       else if (va.pulse) va.pulse(s, ms|0);
     } catch (e) {}
   },
-  /* --- gamepad (Xbox-style, works with Bluetooth controllers) --- */
+  /* --- gamepad (works with Bluetooth controllers; unusual layouts via PadSetup calibration) --- */
   pollGamepad: function(dt){
     var pad = this.getPad();
     if (!pad) return;
     var self = this;
-    function held(ix){ return pad.buttons[ix] && pad.buttons[ix].pressed; }
-    function edge(key, ix, fn){ var h = held(ix); if (h && !self.padOnce[key]) fn(); self.padOnce[key] = h; }
-    function trig(ix){ return pad.buttons[ix] ? pad.buttons[ix].value : 0; }
-    var lx = pad.axes[0]||0, ly = pad.axes[1]||0;
-    var rx = pad.axes[2]||0, ry = pad.axes[3]||0;
-    var dz = function(v){ return Math.abs(v) < 0.18 ? 0 : v; };
-    lx = dz(lx); ly = dz(ly); rx = dz(rx); ry = dz(ry);
+    var lx = this.padAxis("lx"), ly = this.padAxis("ly"), rx = this.padAxis("rx"), ry = this.padAxis("ry");
     // movement fed into keys
     self.keys["KeyW"] = ly < -0.3; self.keys["KeyS"] = ly > 0.3;
     self.keys["KeyA"] = lx < -0.3; self.keys["KeyD"] = lx > 0.3;
@@ -440,19 +509,21 @@ var Input = {
     var lookSpeed = 850 * (self.sens/8);
     self.padLookX += rx * lookSpeed * dt;
     self.padLookY += ry * lookSpeed * dt;
-    self.keys["Space"] = self.keys["Space"] || held(0);
-    edge("pad-a", 0, function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("Space"); });
-    edge("pad-b", 1, function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadNextWeapon"); });
-    edge("pad-x", 2, function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadPrevWeapon"); });
-    edge("pad-y", 3, function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadDodge"); });
-    edge("pad-start", 9, function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("Escape"); });
-    edge("pad-lb", 4, function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadPrevWeapon"); });
-    edge("pad-rb", 5, function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadNextWeapon"); });
-    self.keys["Mouse0"] = trig(7) > 0.35;
-    self.keys["Mouse2"] = trig(6) > 0.35;
-    var dpx = pad.axes[6] !== undefined ? dz(pad.axes[6]) : 0;
-    if (dpx > 0.5) { self._padScrollAcc = (self._padScrollAcc||0) + dt; if (self._padScrollAcc > 0.22) { self._padScrollAcc = 0; for (var j=0;j<self._wheel.length;j++) self._wheel[j](1); } }
-    else if (dpx < -0.5) { self._padScrollAcc2 = (self._padScrollAcc2||0) + dt; if (self._padScrollAcc2 > 0.22) { self._padScrollAcc2 = 0; for (var k2=0;k2<self._wheel.length;k2++) self._wheel[k2](-1); } }
+    self.keys["Space"] = self.keys["Space"] || this.padBtn("a").pressed;
+    function edge(key, name, fn){ var h = self.padBtn(name).pressed; if (h && !self.padOnce[key]) fn(); self.padOnce[key] = h; }
+    edge("pad-a", "a", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("Space"); });
+    edge("pad-b", "b", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadNextWeapon"); });
+    edge("pad-x", "x", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadPrevWeapon"); });
+    edge("pad-y", "y", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadDodge"); });
+    edge("pad-start", "start", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("Escape"); });
+    edge("pad-lb", "lb", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadPrevWeapon"); });
+    edge("pad-rb", "rb", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadNextWeapon"); });
+    self.keys["Mouse0"] = this.padBtn("rt").value > 0.35;
+    self.keys["Mouse2"] = this.padBtn("lt").value > 0.35;
+    // d-pad weapon scroll (hold to repeat)
+    var dpx = (this.padBtn("dprt").pressed ? 1 : 0) + (this.padBtn("dplf").pressed ? -1 : 0);
+    if (dpx > 0) { self._padScrollAcc = (self._padScrollAcc||0) + dt; if (self._padScrollAcc > 0.22) { self._padScrollAcc = 0; for (var j=0;j<self._wheel.length;j++) self._wheel[j](1); } }
+    else if (dpx < 0) { self._padScrollAcc2 = (self._padScrollAcc2||0) + dt; if (self._padScrollAcc2 > 0.22) { self._padScrollAcc2 = 0; for (var k2=0;k2<self._wheel.length;k2++) self._wheel[k2](-1); } }
     else { self._padScrollAcc = 0; self._padScrollAcc2 = 0; }
   }
 };
@@ -2330,6 +2401,7 @@ var PadMenu = {
     else if (row.t === "slider") this.nudgeSens(dir);
   },
   poll: function(dt){
+    if (typeof PadSetup !== "undefined" && PadSetup.open) return;
     var pad = Input.getPad();
     if (!pad) return;
     var rows = this.rows();
@@ -2338,12 +2410,12 @@ var PadMenu = {
     this.sync(rows);
     this.navT -= dt;
     var self = this;
-    function held(ix){ return pad.buttons[ix] && pad.buttons[ix].pressed; }
-    function ax(i){ return (pad.axes && pad.axes[i] !== undefined) ? pad.axes[i] : 0; }
-    var up = held(12) || ax(1) < -0.55;
-    var dn = held(13) || ax(1) > 0.55;
-    var lf = held(14) || ax(0) < -0.55;
-    var rt = held(15) || ax(0) > 0.55;
+    function held(name){ return Input.padBtn(name).pressed; }
+    function ax(name){ return Input.padAxis(name); }
+    var up = held("dpup") || ax("ly") < -0.55;
+    var dn = held("dpdn") || ax("ly") > 0.55;
+    var lf = held("dplf") || ax("lx") < -0.55;
+    var rt = held("dprt") || ax("lx") > 0.55;
     var vert = dn ? 1 : (up ? -1 : 0);
     var horiz = rt ? 1 : (lf ? -1 : 0);
     var self2 = this;
@@ -2363,17 +2435,198 @@ var PadMenu = {
       if (cond && !self.once[key]) fn();
       self.once[key] = cond;
     }
-    edge("a", held(0), function(){ self.activate(rows[self.focus]); });
-    if (Game.state === "title") edge("start", held(9), function(){ Game.startMatch(); });
-    else if (Game.state === "play" && Game.paused) edge("start", held(9), function(){ Game.pause(false); });
-    else if (Game.state === "over") edge("start", held(9), function(){ document.getElementById("endscreen").style.display = "none"; Game.startMatch(); });
-    if (Game.state === "over") edge("b", held(1), function(){ document.getElementById("endscreen").style.display = "none"; Game.toMenu(); });
+    edge("a", held("a"), function(){ self.activate(rows[self.focus]); });
+    if (Game.state === "title") edge("start", held("start"), function(){ Game.startMatch(); });
+    else if (Game.state === "play" && Game.paused) edge("start", held("start"), function(){ Game.pause(false); });
+    else if (Game.state === "over") edge("start", held("start"), function(){ document.getElementById("endscreen").style.display = "none"; Game.startMatch(); });
+    if (Game.state === "over") edge("b", held("b"), function(){ document.getElementById("endscreen").style.display = "none"; Game.toMenu(); });
   },
   clear: function(){
     var ids = ["selBots","selSkill","selFrag","selRumble","sens","sens2","play","resume","quit","again","tomenu"];
     for (var i=0;i<ids.length;i++){
       var e = document.getElementById(ids[i]);
       if (e && e.classList) e.classList.remove("padfocus");
+    }
+  }
+};
+
+/* ============================================================ CONTROLLER SETUP */
+/* Live button/axis monitor + guided calibration wizard for controllers with
+   non-standard layouts (saved per-controller in localStorage, auto-applied). */
+var PadSetup = {
+  open: false, mode: "test", step: 0, stepT: 0, sample: null, result: null, cool: null, _t: 0,
+  STEPS: [
+    { k: "a",    label: "PRESS A / SOUTH BUTTON (JUMP)" },
+    { k: "b",    label: "PRESS B / EAST BUTTON" },
+    { k: "x",    label: "PRESS X / WEST BUTTON" },
+    { k: "y",    label: "PRESS Y / NORTH BUTTON" },
+    { k: "lb",   label: "PRESS LEFT BUMPER / SHOULDER" },
+    { k: "rb",   label: "PRESS RIGHT BUMPER / SHOULDER" },
+    { k: "lt",   label: "HOLD LEFT TRIGGER, THEN RELEASE", analog: true },
+    { k: "rt",   label: "HOLD RIGHT TRIGGER, THEN RELEASE", analog: true },
+    { k: "dpup", label: "PRESS D-PAD UP" },
+    { k: "dpdn", label: "PRESS D-PAD DOWN" },
+    { k: "dplf", label: "PRESS D-PAD LEFT" },
+    { k: "dprt", label: "PRESS D-PAD RIGHT" },
+    { k: "ly",   label: "PUSH LEFT STICK UP, THEN RELEASE", axis: true },
+    { k: "lx",   label: "PUSH LEFT STICK RIGHT, THEN RELEASE", axis: true },
+    { k: "ry",   label: "PUSH RIGHT STICK UP, THEN RELEASE", axis: true },
+    { k: "rx",   label: "PUSH RIGHT STICK RIGHT, THEN RELEASE", axis: true }
+  ],
+  setInfo: function(t){ document.getElementById("padinfo").textContent = t; },
+  openPanel: function(){
+    this.open = true; this.mode = "test";
+    document.getElementById("padsetup").style.display = "flex";
+    document.getElementById("padprompt").style.display = "none";
+    document.getElementById("padcal").style.display = "";
+    document.getElementById("paddone").textContent = "DONE";
+    var pad = Input.getPad();
+    if (!pad) this.setInfo("NO CONTROLLER DETECTED - pair it (Bluetooth or USB), then press any button on it.");
+    else this.setInfo(Input.padName + (Input.padNonStd ? " - NON-STANDARD MAPPING. If the controls do the wrong thing in game, run CALIBRATE BUTTONS." : " - standard mapping. You can still recalibrate if buttons feel wrong."));
+    this.refreshMonitor(pad);
+  },
+  close: function(){
+    this.open = false; this.mode = "test"; this.sample = null;
+    document.getElementById("padsetup").style.display = "none";
+    document.getElementById("padprompt").style.display = "none";
+    document.getElementById("padcal").style.display = "";
+    document.getElementById("paddone").textContent = "DONE";
+  },
+  startCal: function(){
+    if (!Input.getPad()){ this.setInfo("NO CONTROLLER DETECTED - cannot calibrate yet."); return; }
+    this.mode = "cal"; this.step = 0; this.stepT = 0; this.sample = null; this.cool = null;
+    this.result = { buttons: {}, axes: {} };
+    document.getElementById("padcal").style.display = "none";
+    document.getElementById("paddone").textContent = "CANCEL";
+    document.getElementById("padprompt").style.display = "block";
+    this.showPrompt();
+  },
+  showPrompt: function(){
+    document.getElementById("padprompt").textContent = "STEP " + (this.step+1) + "/" + this.STEPS.length + ": " + this.STEPS[this.step].label;
+  },
+  nextStep: function(){
+    this.stepT = 0; this.step++;
+    if (this.step >= this.STEPS.length){ this.finish(); return; }
+    this.showPrompt();
+    var d = this.STEPS[this.step];
+    // snapshot axis baselines at prompt start (previous input has been released by then)
+    if (d.axis || d.analog){
+      var pad0 = Input.getPad();
+      this.sample = { base: ((pad0 && pad0.axes) ? pad0.axes.slice(0, 16) : []), locked: -1, lockedType: null, zero: 0, full: 0, peak: 0, dir: 0 };
+    } else this.sample = null;
+  },
+  finish: function(){
+    Input.savePadMap(this.result);
+    this.mode = "test"; this.result = null;
+    document.getElementById("padprompt").style.display = "none";
+    document.getElementById("padcal").style.display = "";
+    document.getElementById("paddone").textContent = "DONE";
+    this.setInfo("CALIBRATION SAVED - THIS CONTROLLER NOW WORKS WITH THE GAME. TAP THE CHIPS BELOW WHILE PRESSING BUTTONS TO CHECK.");
+  },
+  refreshMonitor: function(pad){
+    var t = document.getElementById("padtest");
+    if (!pad){ t.innerHTML = ""; return; }
+    var html = "";
+    for (var i=0;i<pad.buttons.length && i<20;i++){
+      var b = pad.buttons[i];
+      var val = (b && b.value !== undefined) ? b.value : (b && b.pressed ? 1 : 0);
+      var on = b && (b.pressed || val > 0.3);
+      html += "<span class='padb" + (on ? " on" : "") + "'>B" + i + (val > 0.3 ? " " + val.toFixed(1) : "") + "</span>";
+    }
+    html += "<br>";
+    for (var a=0;pad.axes && a<pad.axes.length && a<12;a++){
+      html += "<span class='pada" + (Math.abs(pad.axes[a]) > 0.3 ? " on" : "") + "'>A" + a + " " + pad.axes[a].toFixed(2) + "</span>";
+    }
+    t.innerHTML = html;
+  },
+  update: function(dt){
+    if (!this.open) return;
+    var pad = Input.getPad();
+    if (this.mode !== "cal"){
+      this._t += dt;
+      if (this._t > 0.15){ this._t = 0; this.refreshMonitor(pad); }
+      return;
+    }
+    if (!pad){ this.setInfo("CONTROLLER LOST - reconnect it (press any button) to continue calibration."); return; }
+    // release gate: the input captured for the previous step must be let go first,
+    // so a held button can never be captured again for the next prompt
+    if (this.cool){
+      var still = false;
+      if (this.cool.type === "button") still = !!(pad.buttons[this.cool.index] && pad.buttons[this.cool.index].pressed);
+      else still = Math.abs((pad.axes[this.cool.index] || 0) - this.cool.base) > 0.2;
+      if (still) return;
+      this.cool = null;
+    }
+    var def = this.STEPS[this.step];
+    this.stepT += dt;
+    if (this.stepT < 0.25) return;               // debounce: let things settle
+    var P = this.result;
+    if (def.axis){
+      // stick calibration: watch for an axis moving away from its baseline, lock, then release
+      var s = this.sample;
+      if (s.locked < 0){
+        for (var i=0;pad.axes && i<pad.axes.length;i++){
+          var base = (s.base[i] !== undefined ? s.base[i] : 0);
+          if (Math.abs((pad.axes[i]||0) - base) > 0.6){
+            s.locked = i; s.peak = pad.axes[i] || 0; s.dir = ((pad.axes[i]||0) > base ? 1 : -1);
+            break;
+          }
+        }
+      } else {
+        var pv = pad.axes[s.locked] || 0;
+        if (Math.abs(pv) > Math.abs(s.peak)) s.peak = pv;
+        if (Math.abs(pv) < 0.18){
+          // normalize to the standard convention the game expects: up = -1, right = +1
+          var yFlip = (def.k === "ly" || def.k === "ry") ? -1 : 1;
+          P.axes[def.k] = { index: s.locked, sign: s.dir * yFlip };
+          this.cool = { type: "axis", index: s.locked, base: s.base[s.locked] || 0 };
+          this.nextStep();
+        }
+      }
+    } else if (def.analog){
+      // trigger calibration: analog button or axis, capture zero->full range
+      var s2 = this.sample;
+      if (!s2.lockedType){
+        for (var b2=0;pad.buttons && b2<pad.buttons.length;b2++){
+          var bb = pad.buttons[b2];
+          var val2 = (bb && bb.value !== undefined ? bb.value : (bb && bb.pressed ? 1 : 0));
+          if (val2 > 0.45){ s2.lockedType = "button"; s2.locked = b2; s2.zero = 0; s2.full = val2; break; }
+        }
+        if (!s2.lockedType){
+          for (var a2=0;pad.axes && a2<pad.axes.length;a2++){
+            var base2 = (s2.base[a2] !== undefined ? s2.base[a2] : 0);
+            if (Math.abs((pad.axes[a2]||0) - base2) > 0.55){
+              s2.lockedType = "axis"; s2.locked = a2; s2.zero = base2; s2.full = pad.axes[a2]||0; break;
+            }
+          }
+        }
+      } else {
+        var cur;
+        if (s2.lockedType === "button"){
+          var b3 = pad.buttons[s2.locked];
+          cur = (b3 && b3.value !== undefined ? b3.value : (b3 && b3.pressed ? 1 : 0));
+        } else cur = pad.axes[s2.locked] || 0;
+        if (Math.abs(cur - s2.zero) > Math.abs(s2.full - s2.zero)) s2.full = cur;
+        if (Math.abs(cur - s2.zero) < 0.12){
+          P.buttons[def.k] = (s2.lockedType === "button")
+            ? { index: s2.locked, full: (Math.abs(s2.full - s2.zero) || 1) }
+            : { axis: s2.locked, zero: s2.zero, full: s2.full };
+          this.cool = (s2.lockedType === "button")
+            ? { type: "button", index: s2.locked }
+            : { type: "axis", index: s2.locked, base: s2.zero };
+          this.nextStep();
+        }
+      }
+    } else {
+      // digital button: first pressed button wins
+      for (var b4=0;pad.buttons && b4<pad.buttons.length;b4++){
+        if (pad.buttons[b4] && pad.buttons[b4].pressed){
+          P.buttons[def.k] = { index: b4, full: 1 };
+          this.cool = { type: "button", index: b4 };
+          this.nextStep();
+          break;
+        }
+      }
     }
   }
 };
@@ -2453,6 +2706,11 @@ var Game = {
     $("quit").onclick = function(){ self.toMenu(); };
     $("again").onclick = function(){ $("endscreen").style.display = "none"; self.startMatch(); };
     $("tomenu").onclick = function(){ $("endscreen").style.display = "none"; self.toMenu(); };
+    // controller setup panel
+    document.getElementById("padstatus").onclick = function(){ PadSetup.openPanel(); };
+    document.getElementById("padcal").onclick = function(){ PadSetup.startCal(); };
+    document.getElementById("paddone").onclick = function(){ PadSetup.close(); };
+    Input.onKeyPress(function(code){ if (PadSetup.open && code === "Escape") PadSetup.close(); });
     // keyboard
     Input.onKeyPress(function(code){
       if (self.state !== "play") return;
@@ -2605,6 +2863,8 @@ var Game = {
       Particles.update(dt);
       for (var q=0;q<World.pads.length;q++) World.pads[q].ring.rotation.z += dt*3;
     }
+    // controller setup panel (monitor + calibration)
+    if (PadSetup.open) PadSetup.update(dt);
     // controller-driven menu navigation (title, pause, end screen)
     if (this.state === "title" || this.state === "over" || (this.state === "play" && this.paused)) PadMenu.poll(dt);
     this.renderer.render(this.scene, this.camera);
