@@ -137,6 +137,7 @@
   <div class="menu">
     <div id="padtest"></div>
     <button class="bigbtn" id="padcal">CALIBRATE BUTTONS</button>
+    <button class="bigbtn ghost" id="padinv">INVERT LOOK Y: OFF</button>
     <button class="bigbtn ghost" id="paddone">DONE</button>
   </div>
 </div>
@@ -310,7 +311,7 @@ var AudioSys = {
 var Input = {
   keys: {}, mouseDX: 0, mouseDY: 0, buttons: [false,false,false],
   pointerLocked: false, softLock: false, touchMode: false, everMouse: false,
-  everLocked: false, relockTries: 0, sens: 8, canvas: null,
+  everLocked: false, relockTries: 0, sens: 8, canvas: null, padYInv: false,
   _kp: [], _md: [], _wheel: [], padLookX: 0, padLookY: 0, lastPad: {}, padOnce: {},
   padMoveX: 0, padMoveY: 0, padJump: false, padFire: false, padAlt: false,
   padIndex: -1, padName: "", padNonStd: false, _padWas: false, padMap: null,
@@ -424,6 +425,20 @@ var Input = {
     var raw = (ix !== undefined && pad.axes[ix] !== undefined) ? pad.axes[ix] : 0;
     return Math.abs(raw) < 0.18 ? 0 : raw;
   },
+  /* map-aware read WITHOUT deadzone - used for the look stick so a radial
+     deadzone can be applied to the stick vector (kills drift-spin) */
+  padAxisRaw: function(name){
+    var pad = this.getPad();
+    if (!pad || !pad.axes) return 0;
+    var m = this.padMap;
+    if (m && m.axes && m.axes[name]){
+      var e = m.axes[name];
+      return (pad.axes[e.index] !== undefined ? pad.axes[e.index] : 0) * (e.sign || 1);
+    }
+    var std2 = { lx:0, ly:1, rx:2, ry:3 };
+    var ix2 = std2[name];
+    return (ix2 !== undefined && pad.axes[ix2] !== undefined) ? pad.axes[ix2] : 0;
+  },
   loadPadMap: function(){
     try {
       this.padMap = null;
@@ -502,7 +517,7 @@ var Input = {
     var pad = this.getPad();
     if (!pad) return;
     var self = this;
-    var lx = this.padAxis("lx"), ly = this.padAxis("ly"), rx = this.padAxis("rx"), ry = this.padAxis("ry");
+    var lx = this.padAxis("lx"), ly = this.padAxis("ly");
     // pad state kept SEPARATE from keyboard keys and merged in Player.update:
     // writing keys["KeyW"]/["Space"]/["Mouse0"] here made them sticky (jump fired
     // only once per session) and zeroed keyboard input while a pad was connected
@@ -510,10 +525,22 @@ var Input = {
     self.padJump = this.padBtn("a").pressed;
     self.padFire = this.padBtn("rt").value > 0.35;
     self.padAlt = this.padBtn("lt").value > 0.35;
-    // right stick look
-    var lookSpeed = 850 * (self.sens/8);
-    self.padLookX += rx * lookSpeed * dt;
-    self.padLookY += ry * lookSpeed * dt;
+    // right stick look: radial deadzone on the RAW stick vector (drift under
+    // 0.2 is ignored - no slow camera spin from a worn stick), a smooth
+    // response curve (fine aim at small tilts, ~265 deg/s at full tilt with
+    // default sensitivity), and NO sens scaling here: consumeLook applies
+    // (sens/8) once. The old code scaled by sens here AND in consumeLook,
+    // making pad look grow quadratically with the slider.
+    var rrx = this.padAxisRaw("rx"), rry = this.padAxisRaw("ry");
+    if (self.padYInv) rry = -rry;
+    var rmag = Math.sqrt(rrx*rrx + rry*rry);
+    if (rmag > 0.2){
+      var nrm = (rmag - 0.2) / 0.8; if (nrm > 1) nrm = 1;
+      nrm = nrm * nrm * 0.4 + nrm * 0.6;
+      var k = 2100 * nrm / rmag;
+      self.padLookX += rrx * k * dt;
+      self.padLookY += rry * k * dt;
+    }
     function edge(key, name, fn){ var h = self.padBtn(name).pressed; if (h && !self.padOnce[key]) fn(); self.padOnce[key] = h; }
     edge("pad-a", "a", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("Space"); });
     edge("pad-b", "b", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadNextWeapon"); });
@@ -1456,7 +1483,10 @@ var Player = {
     var a = this.a;
     if (Input.pollGamepad) Input.pollGamepad(dt);
     var look = Input.consumeLook();
-    if (a.alive && Input.locked() && !Game.boardOpen){
+    // pointer lock only exists to capture the MOUSE; pad look must not depend
+    // on it - apply look whenever the mouse is locked/soft-locked OR the pad
+    // is supplying look input this frame
+    if (a.alive && !Game.boardOpen && (Input.locked() || look.dx !== 0 || look.dy !== 0)){
       a.yaw -= look.dx;
       a.pitch = clamp(a.pitch - look.dy, -1.45, 1.45);
     }
@@ -2483,6 +2513,7 @@ var PadSetup = {
     document.getElementById("padsetup").style.display = "flex";
     document.getElementById("padprompt").style.display = "none";
     document.getElementById("padcal").style.display = "";
+    document.getElementById("padinv").style.display = "";
     document.getElementById("paddone").textContent = "DONE";
     var pad = Input.getPad();
     if (!pad) this.setInfo("NO CONTROLLER DETECTED - pair it (Bluetooth or USB), then press any button on it.");
@@ -2494,6 +2525,7 @@ var PadSetup = {
     document.getElementById("padsetup").style.display = "none";
     document.getElementById("padprompt").style.display = "none";
     document.getElementById("padcal").style.display = "";
+    document.getElementById("padinv").style.display = "";
     document.getElementById("paddone").textContent = "DONE";
   },
   startCal: function(){
@@ -2503,6 +2535,7 @@ var PadSetup = {
     var pad0 = Input.getPad();
     this.sample = { base: ((pad0 && pad0.axes) ? pad0.axes.slice(0, 16) : []), locked: -1, lockedType: null, zero: 0, full: 0, peak: 0, dir: 0 };
     document.getElementById("padcal").style.display = "none";
+    document.getElementById("padinv").style.display = "none";
     document.getElementById("paddone").textContent = "CANCEL";
     document.getElementById("padprompt").style.display = "block";
     this.showPrompt();
@@ -2525,6 +2558,7 @@ var PadSetup = {
     this.mode = "test"; this.result = null;
     document.getElementById("padprompt").style.display = "none";
     document.getElementById("padcal").style.display = "";
+    document.getElementById("padinv").style.display = "";
     document.getElementById("paddone").textContent = "DONE";
     this.setInfo("CALIBRATION SAVED - THIS CONTROLLER NOW WORKS WITH THE GAME. TAP THE CHIPS BELOW WHILE PRESSING BUTTONS TO CHECK.");
   },
@@ -2733,6 +2767,15 @@ var Game = {
     // controller setup panel
     document.getElementById("padstatus").onclick = function(){ PadSetup.openPanel(); };
     document.getElementById("padcal").onclick = function(){ PadSetup.startCal(); };
+    var padInvBtn = document.getElementById("padinv");
+    var refreshPadInv = function(){ padInvBtn.textContent = "INVERT LOOK Y: " + (Input.padYInv ? "ON" : "OFF"); };
+    padInvBtn.onclick = function(){
+      Input.padYInv = !Input.padYInv;
+      try { localStorage.setItem("ta-padyinv", Input.padYInv ? "1" : "0"); } catch (e){}
+      refreshPadInv();
+    };
+    try { Input.padYInv = (localStorage.getItem("ta-padyinv") === "1"); } catch (e){}
+    refreshPadInv();
     document.getElementById("paddone").onclick = function(){ PadSetup.close(); };
     Input.onKeyPress(function(code){ if (PadSetup.open && code === "Escape") PadSetup.close(); });
     // keyboard
