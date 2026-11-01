@@ -312,6 +312,7 @@ var Input = {
   pointerLocked: false, softLock: false, touchMode: false, everMouse: false,
   everLocked: false, relockTries: 0, sens: 8, canvas: null,
   _kp: [], _md: [], _wheel: [], padLookX: 0, padLookY: 0, lastPad: {}, padOnce: {},
+  padMoveX: 0, padMoveY: 0, padJump: false, padFire: false, padAlt: false,
   padIndex: -1, padName: "", padNonStd: false, _padWas: false, padMap: null,
   _STD_BTN: { a:0, b:1, x:2, y:3, lb:4, rb:5, lt:6, rt:7, start:9, dpup:12, dpdn:13, dplf:14, dprt:15 },
   init: function(canvas){
@@ -502,14 +503,17 @@ var Input = {
     if (!pad) return;
     var self = this;
     var lx = this.padAxis("lx"), ly = this.padAxis("ly"), rx = this.padAxis("rx"), ry = this.padAxis("ry");
-    // movement fed into keys
-    self.keys["KeyW"] = ly < -0.3; self.keys["KeyS"] = ly > 0.3;
-    self.keys["KeyA"] = lx < -0.3; self.keys["KeyD"] = lx > 0.3;
+    // pad state kept SEPARATE from keyboard keys and merged in Player.update:
+    // writing keys["KeyW"]/["Space"]/["Mouse0"] here made them sticky (jump fired
+    // only once per session) and zeroed keyboard input while a pad was connected
+    self.padMoveX = lx; self.padMoveY = ly;
+    self.padJump = this.padBtn("a").pressed;
+    self.padFire = this.padBtn("rt").value > 0.35;
+    self.padAlt = this.padBtn("lt").value > 0.35;
     // right stick look
     var lookSpeed = 850 * (self.sens/8);
     self.padLookX += rx * lookSpeed * dt;
     self.padLookY += ry * lookSpeed * dt;
-    self.keys["Space"] = self.keys["Space"] || this.padBtn("a").pressed;
     function edge(key, name, fn){ var h = self.padBtn(name).pressed; if (h && !self.padOnce[key]) fn(); self.padOnce[key] = h; }
     edge("pad-a", "a", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("Space"); });
     edge("pad-b", "b", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadNextWeapon"); });
@@ -518,9 +522,6 @@ var Input = {
     edge("pad-start", "start", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("Escape"); });
     edge("pad-lb", "lb", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadPrevWeapon"); });
     edge("pad-rb", "rb", function(){ for (var i=0;i<self._kp.length;i++) self._kp[i]("PadNextWeapon"); });
-    self.keys["Mouse0"] = this.padBtn("rt").value > 0.35;
-    self.keys["Mouse2"] = this.padBtn("lt").value > 0.35;
-    // d-pad weapon scroll (hold to repeat)
     var dpx = (this.padBtn("dprt").pressed ? 1 : 0) + (this.padBtn("dplf").pressed ? -1 : 0);
     if (dpx > 0) { self._padScrollAcc = (self._padScrollAcc||0) + dt; if (self._padScrollAcc > 0.22) { self._padScrollAcc = 0; for (var j=0;j<self._wheel.length;j++) self._wheel[j](1); } }
     else if (dpx < 0) { self._padScrollAcc2 = (self._padScrollAcc2||0) + dt; if (self._padScrollAcc2 > 0.22) { self._padScrollAcc2 = 0; for (var k2=0;k2<self._wheel.length;k2++) self._wheel[k2](-1); } }
@@ -1470,21 +1471,24 @@ var Player = {
     a.protect = Math.max(0, a.protect - dt);
     a.amp = Math.max(0, a.amp - dt);
     a.cooldown = Math.max(0, a.cooldown - dt);
-    // wish dir (camera relative)
-    var f = (Input.keys["KeyW"]?1:0) - (Input.keys["KeyS"]?1:0);
-    var s = (Input.keys["KeyD"]?1:0) - (Input.keys["KeyA"]?1:0);
+    // wish dir (camera relative); keyboard and pad are MERGED so a connected
+    // pad never zeroes keyboard input, and the stick gives analog walk speed
+    var f = (Input.keys["KeyW"]?1:0) - (Input.keys["KeyS"]?1:0) - (Input.padMoveY || 0);
+    var s = (Input.keys["KeyD"]?1:0) - (Input.keys["KeyA"]?1:0) + (Input.padMoveX || 0);
+    f = clamp(f, -1, 1); s = clamp(s, -1, 1);
     var sin = Math.sin(a.yaw), cos = Math.cos(a.yaw);
     var wishX = (-sin*f + cos*s);
     var wishZ = (-cos*f + -sin*s);
-    // jump edge (handles ground jump + mid-air double jump)
-    if (Input.keys["Space"] && !this.jumpHeld){
+    // jump edge (handles ground jump + mid-air double jump); pad A merges with Space
+    var jumpKey = Input.keys["Space"] || Input.padJump;
+    if (jumpKey && !this.jumpHeld){
       var jr = actorJump(a);
       if (jr) AudioSys.play("jump");
     }
-    this.jumpHeld = Input.keys["Space"];
-    // firing (mouse buttons polled + gamepad triggers)
-    if ((Input.buttons[0] || Input.keys["Mouse0"])){ var c0 = this.a.cooldown; this.tryFire(false); if (this.a.cooldown > c0) Input.rumble(0.14, 60); }
-    if ((Input.buttons[2] || Input.keys["Mouse2"])){ var c1 = this.a.cooldown; this.tryFire(true); if (this.a.cooldown > c1) Input.rumble(0.1, 60); }
+    this.jumpHeld = jumpKey;
+    // firing (mouse buttons polled + gamepad triggers merged)
+    if ((Input.buttons[0] || Input.keys["Mouse0"] || Input.padFire)){ var c0 = this.a.cooldown; this.tryFire(false); if (this.a.cooldown > c0) Input.rumble(0.14, 60); }
+    if ((Input.buttons[2] || Input.keys["Mouse2"] || Input.padAlt)){ var c1 = this.a.cooldown; this.tryFire(true); if (this.a.cooldown > c1) Input.rumble(0.1, 60); }
     driveActor(a, dt, wishX, wishZ);
     // pads & lava
     var pad = World.padAt(a.pos);
@@ -2740,8 +2744,8 @@ var Game = {
       if (code === "PadPrevWeapon"){ Player.cycleWeapon(-1); return; }
       if (code === "PadDodge"){
         var a = self.player;
-        var f = (Input.keys["KeyW"]?1:0) - (Input.keys["KeyS"]?1:0);
-        var s = (Input.keys["KeyD"]?1:0) - (Input.keys["KeyA"]?1:0);
+        var f = (Input.keys["KeyW"]?1:0) - (Input.keys["KeyS"]?1:0) - (Input.padMoveY || 0);
+        var s = (Input.keys["KeyD"]?1:0) - (Input.keys["KeyA"]?1:0) + (Input.padMoveX || 0);
         if (f || s){
           var sin = Math.sin(a.yaw), cos = Math.cos(a.yaw);
           if (Player.dodgeCd <= 0 && actorDodge(a, -sin*f + cos*s, -cos*f - sin*s)){
