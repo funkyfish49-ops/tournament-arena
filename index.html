@@ -2494,8 +2494,10 @@ var PadSetup = {
   },
   startCal: function(){
     if (!Input.getPad()){ this.setInfo("NO CONTROLLER DETECTED - cannot calibrate yet."); return; }
-    this.mode = "cal"; this.step = 0; this.stepT = 0; this.sample = null; this.cool = null;
+    this.mode = "cal"; this.step = 0; this.stepT = 0; this.cool = null;
     this.result = { buttons: {}, axes: {} };
+    var pad0 = Input.getPad();
+    this.sample = { base: ((pad0 && pad0.axes) ? pad0.axes.slice(0, 16) : []), locked: -1, lockedType: null, zero: 0, full: 0, peak: 0, dir: 0 };
     document.getElementById("padcal").style.display = "none";
     document.getElementById("paddone").textContent = "CANCEL";
     document.getElementById("padprompt").style.display = "block";
@@ -2509,11 +2511,10 @@ var PadSetup = {
     if (this.step >= this.STEPS.length){ this.finish(); return; }
     this.showPrompt();
     var d = this.STEPS[this.step];
-    // snapshot axis baselines at prompt start (previous input has been released by then)
-    if (d.axis || d.analog){
-      var pad0 = Input.getPad();
-      this.sample = { base: ((pad0 && pad0.axes) ? pad0.axes.slice(0, 16) : []), locked: -1, lockedType: null, zero: 0, full: 0, peak: 0, dir: 0 };
-    } else this.sample = null;
+    // snapshot axis baselines at prompt start (previous input has been released by then);
+    // digital steps need them too so d-pads reported on axes can be captured
+    var pad0 = Input.getPad();
+    this.sample = { base: ((pad0 && pad0.axes) ? pad0.axes.slice(0, 16) : []), locked: -1, lockedType: null, zero: 0, full: 0, peak: 0, dir: 0 };
   },
   finish: function(){
     Input.savePadMap(this.result);
@@ -2556,6 +2557,9 @@ var PadSetup = {
       else still = Math.abs((pad.axes[this.cool.index] || 0) - this.cool.base) > 0.2;
       if (still) return;
       this.cool = null;
+      // the captured input is now fully released: refresh axis baselines so the next
+      // prompt can never capture the release itself (d-pad hats share axes)
+      this.sample = { base: ((pad && pad.axes) ? pad.axes.slice(0, 16) : []), locked: -1, lockedType: null, zero: 0, full: 0, peak: 0, dir: 0 };
     }
     var def = this.STEPS[this.step];
     this.stepT += dt;
@@ -2618,13 +2622,29 @@ var PadSetup = {
         }
       }
     } else {
-      // digital button: first pressed button wins
+      // digital button: first pressed button wins; d-pad-on-axes pads (e.g. Luna) captured via axis deflection
+      var got = false;
       for (var b4=0;pad.buttons && b4<pad.buttons.length;b4++){
-        if (pad.buttons[b4] && pad.buttons[b4].pressed){
+        var pb = pad.buttons[b4];
+        var pv4 = (pb && pb.value !== undefined ? pb.value : (pb && pb.pressed ? 1 : 0));
+        if (pb && (pb.pressed || pv4 > 0.5)){
           P.buttons[def.k] = { index: b4, full: 1 };
           this.cool = { type: "button", index: b4 };
           this.nextStep();
-          break;
+          got = true; break;
+        }
+      }
+      if (!got){
+        var s3 = this.sample;
+        for (var a3=0;pad.axes && a3<pad.axes.length;a3++){
+          var base3 = (s3 && s3.base[a3] !== undefined ? s3.base[a3] : 0);
+          var v3 = pad.axes[a3] || 0;
+          if (Math.abs(v3 - base3) > 0.6){
+            P.buttons[def.k] = { axis: a3, zero: base3, full: v3 };
+            this.cool = { type: "axis", index: a3, base: base3 };
+            this.nextStep();
+            break;
+          }
         }
       }
     }
